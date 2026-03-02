@@ -22,7 +22,11 @@ CreativeClaw bridges natural language control (Telegram + CLI) with pro creative
 Implemented now:
 - Monorepo structure (apps + packages)
 - Gateway service with health/tools/connectors endpoints
-- CLI (`status`, `doctor`, `config`)
+- Telegram inbound webhook wiring (`POST /telegram/inbound`)
+- Brave search integration endpoint (`GET /search?q=...`)
+- API registry with templates (ElevenLabs, Freepik, Pexels)
+- In-memory job queue with retry + high-risk approval flow
+- CLI (`status`, `doctor`, `config`, `api list`, `api show <name>`)
 - Tool registry with progressive detail levels
 - Action executor (sandboxed runtime stub)
 - Style memory store (signal + aggregate)

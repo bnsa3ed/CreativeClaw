@@ -14,6 +14,9 @@
     "@creativeclaw/tool-registry": "0.1.0",
     "@creativeclaw/action-executor": "0.1.0",
     "@creativeclaw/memory": "0.1.0",
-    "@creativeclaw/connectors-adobe": "0.1.0"
+    "@creativeclaw/connectors-adobe": "0.1.0",
+    "@creativeclaw/search": "0.1.0",
+    "@creativeclaw/api-registry": "0.1.0",
+    "@creativeclaw/jobs": "0.1.0"
   }
 }
