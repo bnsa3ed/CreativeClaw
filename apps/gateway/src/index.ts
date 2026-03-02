@@ -8,6 +8,7 @@ import { AdobeConnectorHub, getOperationSchema, validateOperationPayload } from 
 import { BraveSearchClient } from '../../../packages/search/src/index.js';
 import { APIRegistry } from '../../../packages/api-registry/src/index.js';
 import { JobQueue } from '../../../packages/jobs/src/index.js';
+import { EventBus } from '../../../packages/observability/src/index.js';
 import type { LocalBridgeMessage, WorkerExecute, WorkerHello, WorkerResult } from '../../../packages/protocol/src/index.js';
 
 const config = mergeConfig({});
@@ -17,6 +18,7 @@ const connectors = new AdobeConnectorHub();
 const search = new BraveSearchClient(process.env.BRAVE_SEARCH_API_KEY);
 const apis = new APIRegistry();
 const jobs = new JobQueue();
+const events = new EventBus();
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
@@ -73,8 +75,15 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
 
   if (url.pathname === '/health') {
+    events.emit('health_check');
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ ok: true, app: 'creativeclaw-gateway' }));
+    return;
+  }
+
+  if (url.pathname === '/events') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ counters: events.counters(), recent: events.list(50) }));
     return;
   }
 
@@ -98,6 +107,7 @@ const server = createServer(async (req, res) => {
 
     const schema = getOperationSchema(app, operation);
     if (!schema) {
+      events.emit('worker_execute_unknown', 'warn', { app, operation });
       res.writeHead(400, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: false, error: 'unknown_operation' }));
       return;
@@ -105,12 +115,14 @@ const server = createServer(async (req, res) => {
 
     const valid = validateOperationPayload(schema, payload);
     if (!valid.ok) {
+      events.emit('worker_execute_invalid_payload', 'warn', { app, operation, missing: valid.missing });
       res.writeHead(400, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: false, error: 'invalid_payload', missing: valid.missing }));
       return;
     }
 
     if (schema.risk === 'high') {
+      events.emit('approval_required', 'info', { app, operation, risk: schema.risk });
       const approvalId = randomUUID();
       pendingApprovals.set(approvalId, { type: 'execute', requestId: randomUUID(), app, operation, payload, workerId, risk: schema.risk });
       await sendTelegramMessage(`Approval required: ${operation} (${app}) [id:${approvalId}]`);
@@ -140,6 +152,7 @@ const server = createServer(async (req, res) => {
       return;
     }
     pendingApprovals.delete(approvalId);
+    events.emit('approval_executed', 'info', { approvalId, app: reqObj.app, operation: reqObj.operation });
     const result = await dispatchToWorker(reqObj.workerId, reqObj.app, reqObj.operation, reqObj.payload);
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify(result));
@@ -172,7 +185,7 @@ const server = createServer(async (req, res) => {
   }
 
   if (url.pathname === '/memory/demo') {
-    memory.remember({ editType: 'trim_clip', projectId: 'demo', confidence: 0.8, timestamp: Date.now(), signals: { shotLength: 2.4 } });
+    memory.remember({ editType: 'trim_clip', projectId: 'demo', confidence: 0.8, approved: true, timestamp: Date.now(), signals: { shotLength: 2.4 } });
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify(memory.aggregate('demo')));
     return;
@@ -271,6 +284,7 @@ wss.on('connection', (ws: WebSocket) => {
       const hello = msg as WorkerHello;
       workerId = hello.workerId;
       workers.set(workerId, { ws, capabilities: hello.capabilities, lastSeen: Date.now() });
+      events.emit('worker_connected', 'info', { workerId, capabilities: hello.capabilities });
       return;
     }
 
@@ -282,6 +296,7 @@ wss.on('connection', (ws: WebSocket) => {
         pendingReq.resolve(result);
         pending.delete(result.requestId);
       }
+      events.emit('worker_result', result.ok ? 'info' : 'warn', { requestId: result.requestId, ok: result.ok });
       if (workerId && workers.has(workerId)) {
         workers.get(workerId)!.lastSeen = Date.now();
       }

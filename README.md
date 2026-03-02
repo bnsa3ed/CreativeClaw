@@ -33,6 +33,9 @@ Implemented now:
 - Risk classification per Adobe operation (low/medium/high)
 - High-risk approval flow (`GET /worker/approvals`, `POST /worker/approve?approvalId=...`)
 - Worker-side connector handlers wired by app/operation
+- Weighted style-learning confidence engine (approval + recency aware)
+- Vector memory backend abstraction (in-memory backend included)
+- Observability event bus + `/events` endpoint
 - CLI (`status`, `doctor`, `config`, `api templates`, `api add/test/remove/list/show`)
 - Tool registry with progressive detail levels
 - Action executor (sandboxed runtime stub)

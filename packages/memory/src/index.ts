@@ -1,13 +1,11 @@
-export interface StyleSignal {
-  editType: string;
-  projectId: string;
-  confidence: number;
-  timestamp: number;
-  signals: Record<string, unknown>;
-}
+export * from './style-learning.js';
+export * from './vector-backends.js';
+
+import { StyleLearningEngine, type StyleSignal } from './style-learning.js';
 
 export class MemoryStore {
   private signals: StyleSignal[] = [];
+  private engine = new StyleLearningEngine();
 
   remember(signal: StyleSignal): void {
     this.signals.push(signal);
@@ -18,8 +16,6 @@ export class MemoryStore {
   }
 
   aggregate(projectId: string) {
-    const rows = this.recall(projectId);
-    const avgConfidence = rows.length ? rows.reduce((a, b) => a + b.confidence, 0) / rows.length : 0;
-    return { projectId, count: rows.length, avgConfidence };
+    return this.engine.summarize(projectId, this.signals);
   }
 }
