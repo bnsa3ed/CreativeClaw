@@ -17,6 +17,7 @@
     "@creativeclaw/connectors-adobe": "0.1.0",
     "@creativeclaw/search": "0.1.0",
     "@creativeclaw/api-registry": "0.1.0",
-    "@creativeclaw/jobs": "0.1.0"
+    "@creativeclaw/jobs": "0.1.0",
+    "ws": "^8.18.0"
   }
 }

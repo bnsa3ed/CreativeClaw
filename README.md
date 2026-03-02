@@ -27,6 +27,8 @@ Implemented now:
 - API registry with templates (ElevenLabs, Freepik, Pexels)
 - Encrypted API credential store (CLI add/test/remove/list)
 - SQLite-backed job queue with retry + high-risk approval flow
+- Local Adobe bridge over WebSocket (`/ws/local`) with worker registration and remote execute
+- Worker management + command endpoint (`GET /workers`, `POST /worker/execute?...`)
 - CLI (`status`, `doctor`, `config`, `api templates`, `api add/test/remove/list/show`)
 - Tool registry with progressive detail levels
 - Action executor (sandboxed runtime stub)
@@ -79,6 +81,13 @@ npm run build
 ```bash
 npm run -w @creativeclaw/gateway start
 # -> http://127.0.0.1:3789/health
+```
+
+### Run local worker bridge
+
+```bash
+npm run -w @creativeclaw/worker-local build
+node dist/apps/worker-local/src/index.js
 ```
 
 ### Run CLI
