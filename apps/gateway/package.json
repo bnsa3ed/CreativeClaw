@@ -19,6 +19,7 @@
     "@creativeclaw/api-registry": "0.1.0",
     "@creativeclaw/jobs": "0.1.0",
     "@creativeclaw/observability": "0.1.0",
+    "@creativeclaw/collaboration": "0.1.0",
     "ws": "^8.18.0"
   }
 }

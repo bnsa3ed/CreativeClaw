@@ -9,6 +9,7 @@ import { BraveSearchClient } from '../../../packages/search/src/index.js';
 import { APIRegistry } from '../../../packages/api-registry/src/index.js';
 import { JobQueue } from '../../../packages/jobs/src/index.js';
 import { EventBus } from '../../../packages/observability/src/index.js';
+import { TeamRBAC } from '../../../packages/collaboration/src/index.js';
 import type { LocalBridgeMessage, WorkerExecute, WorkerHello, WorkerResult } from '../../../packages/protocol/src/index.js';
 
 const config = mergeConfig({});
@@ -19,6 +20,7 @@ const search = new BraveSearchClient(process.env.BRAVE_SEARCH_API_KEY);
 const apis = new APIRegistry();
 const jobs = new JobQueue();
 const events = new EventBus();
+const team = new TeamRBAC();
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
@@ -114,6 +116,42 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if (url.pathname === '/team/users' && req.method === 'GET') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(team.list()));
+    return;
+  }
+
+  if (url.pathname === '/team/users' && req.method === 'POST') {
+    const body = await readBody(req).catch(() => ({}));
+    const userId = String(body.userId || '');
+    const role = body.role as any;
+    if (!userId || !['owner','editor','reviewer','viewer'].includes(role)) {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'invalid_user_or_role' }));
+      return;
+    }
+    const row = team.upsert(userId, role);
+    events.emit('team_user_upserted', 'info', { userId: row.userId, role: row.role });
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, user: row }));
+    return;
+  }
+
+  if (url.pathname === '/team/users' && req.method === 'DELETE') {
+    const userId = url.searchParams.get('userId') || '';
+    if (!userId) {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'missing_userId' }));
+      return;
+    }
+    team.remove(userId);
+    events.emit('team_user_removed', 'warn', { userId });
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
   if (url.pathname === '/worker/execute' && req.method === 'POST') {
     const workerId = url.searchParams.get('workerId') || '';
     const app = (url.searchParams.get('app') || 'premiere') as WorkerExecute['app'];
@@ -160,6 +198,13 @@ const server = createServer(async (req, res) => {
 
   if (url.pathname === '/worker/approve' && req.method === 'POST') {
     const approvalId = url.searchParams.get('approvalId') || '';
+    const actorId = url.searchParams.get('actorId') || '';
+    if (!actorId || !team.canApprove(actorId)) {
+      res.writeHead(403, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'forbidden', message: 'actor lacks approval role' }));
+      return;
+    }
+
     const reqObj = pendingApprovals.get(approvalId);
     if (!reqObj) {
       res.writeHead(404, { 'content-type': 'application/json' });
@@ -167,7 +212,7 @@ const server = createServer(async (req, res) => {
       return;
     }
     pendingApprovals.delete(approvalId);
-    events.emit('approval_executed', 'info', { approvalId, app: reqObj.app, operation: reqObj.operation });
+    events.emit('approval_executed', 'info', { approvalId, actorId, app: reqObj.app, operation: reqObj.operation });
     const result = await dispatchToWorker(reqObj.workerId, reqObj.app, reqObj.operation, reqObj.payload);
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify(result));
@@ -243,6 +288,7 @@ const server = createServer(async (req, res) => {
     try {
       const update = await readBody(req);
       const text = (update?.message?.text || '').trim();
+      const actorId = String(update?.message?.from?.id || '');
 
       if (text === '/start') {
         await sendTelegramMessage('CreativeClaw is online ✅');
@@ -255,13 +301,17 @@ const server = createServer(async (req, res) => {
         await sendTelegramMessage(`Job executed: ${job.name}`);
       } else if (text.startsWith('/approve ')) {
         const id = text.replace('/approve', '').trim();
-        const reqObj = pendingApprovals.get(id);
-        if (reqObj) {
-          pendingApprovals.delete(id);
-          const result = await dispatchToWorker(reqObj.workerId, reqObj.app, reqObj.operation, reqObj.payload);
-          await sendTelegramMessage(`Approved and executed ${reqObj.operation}: ${JSON.stringify(result)}`);
+        if (!team.canApprove(actorId)) {
+          await sendTelegramMessage(`Actor ${actorId} is not allowed to approve.`);
         } else {
-          await sendTelegramMessage(`Approval id not found: ${id}`);
+          const reqObj = pendingApprovals.get(id);
+          if (reqObj) {
+            pendingApprovals.delete(id);
+            const result = await dispatchToWorker(reqObj.workerId, reqObj.app, reqObj.operation, reqObj.payload);
+            await sendTelegramMessage(`Approved and executed ${reqObj.operation}: ${JSON.stringify(result)}`);
+          } else {
+            await sendTelegramMessage(`Approval id not found: ${id}`);
+          }
         }
       } else if (text) {
         await sendTelegramMessage(`CreativeClaw received: ${text}`);

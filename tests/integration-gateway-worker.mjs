@@ -26,8 +26,14 @@ const approvals = await fetch('http://127.0.0.1:3789/worker/approvals').then(r=>
 assert.ok(approvals.length > 0);
 const aid = approvals[0].approvalId;
 
-const approved = await fetch(`http://127.0.0.1:3789/worker/approve?approvalId=${aid}`, { method:'POST' }).then(r=>r.json());
+const forbidden = await fetch(`http://127.0.0.1:3789/worker/approve?approvalId=${aid}&actorId=not_allowed`, { method:'POST' }).then(r=>r.json());
+assert.equal(forbidden.error, 'forbidden');
+
+const approved = await fetch(`http://127.0.0.1:3789/worker/approve?approvalId=${aid}&actorId=5238367056`, { method:'POST' }).then(r=>r.json());
 assert.equal(typeof approved.ok, 'boolean');
+
+const teamUsers = await fetch('http://127.0.0.1:3789/team/users').then(r=>r.json());
+assert.ok(teamUsers.some(u => u.userId === '5238367056'));
 
 const metrics = await fetch('http://127.0.0.1:3789/metrics').then(r=>r.text());
 assert.ok(metrics.includes('creativeclaw_events_total'));

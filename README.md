@@ -38,6 +38,7 @@ Implemented now:
 - Observability event bus + `/events` endpoint
 - Prometheus-friendly `/metrics` endpoint
 - Dashboard skeleton app (`@creativeclaw/dashboard`)
+- Team/RBAC groundwork with approval roles (owner/reviewer can approve high-risk ops)
 - CLI (`status`, `doctor`, `config`, `api templates`, `api add/test/remove/list/show`)
 - Tool registry with progressive detail levels
 - Action executor (sandboxed runtime stub)
