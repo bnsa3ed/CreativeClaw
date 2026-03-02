@@ -65,7 +65,7 @@ const server = createServer(async (req, res) => {
 
   if (url.pathname === '/apis') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ templates: apis.list() }));
+    res.end(JSON.stringify({ templates: apis.listTemplates() }));
     return;
   }
 
@@ -121,8 +121,21 @@ const server = createServer(async (req, res) => {
     req.on('end', async () => {
       try {
         const update = JSON.parse(body || '{}');
-        const text = update?.message?.text || '';
-        if (text) await sendTelegramMessage(`CreativeClaw received: ${text}`);
+        const text = (update?.message?.text || '').trim();
+
+        if (text === '/start') {
+          await sendTelegramMessage('CreativeClaw is online ✅');
+        } else if (text === '/status') {
+          await sendTelegramMessage('Status: healthy, queue ready, connectors loaded.');
+        } else if (text.startsWith('/run-job')) {
+          const name = text.replace('/run-job', '').trim() || 'telegram_job';
+          const job = jobs.add(name, 'low');
+          await jobs.runNext(async () => {});
+          await sendTelegramMessage(`Job executed: ${job.name}`);
+        } else if (text) {
+          await sendTelegramMessage(`CreativeClaw received: ${text}`);
+        }
+
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ ok: true }));
       } catch (err) {

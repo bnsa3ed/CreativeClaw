@@ -18,5 +18,6 @@
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
     "types": ["node"]
-  }
+  },
+  "include": ["types/**/*.d.ts"]
 }
