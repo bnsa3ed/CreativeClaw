@@ -1,5 +1,8 @@
 export type AdobeApp = 'premiere' | 'aftereffects' | 'photoshop' | 'illustrator';
 
+export * from './operations.js';
+export * from './handlers.js';
+
 export interface ConnectorHealth {
   app: AdobeApp;
   healthy: boolean;

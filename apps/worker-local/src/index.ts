@@ -1,5 +1,6 @@
 import WebSocket from 'ws';
 import type { LocalBridgeMessage, WorkerHello, WorkerExecute, WorkerResult } from '../../../packages/protocol/src/index.js';
+import { runConnectorOperation } from '../../../packages/connectors-adobe/src/index.js';
 
 const GATEWAY_WS_URL = process.env.CREATIVECLAW_GATEWAY_WS || 'ws://127.0.0.1:3789/ws/local';
 const WORKER_ID = process.env.CREATIVECLAW_WORKER_ID || `worker_${Math.floor(Math.random() * 9999)}`;
@@ -16,22 +17,19 @@ ws.on('open', () => {
   console.log(`CreativeClaw local worker connected: ${WORKER_ID}`);
 });
 
-ws.on('message', (raw: WebSocket.RawData) => {
+ws.on('message', async (raw: WebSocket.RawData) => {
   const msg = JSON.parse(String(raw)) as LocalBridgeMessage;
   if (msg.type !== 'execute') return;
 
   const req = msg as WorkerExecute;
+  const result = await runConnectorOperation(req.app, req.operation, req.payload);
+
   const res: WorkerResult = {
     type: 'result',
     requestId: req.requestId,
-    ok: true,
-    output: {
-      workerId: WORKER_ID,
-      app: req.app,
-      operation: req.operation,
-      handledAt: Date.now(),
-      note: 'Stub execution complete (replace with Adobe connector call)'
-    }
+    ok: result.ok,
+    output: result.ok ? result.output : undefined,
+    error: result.ok ? undefined : result.error
   };
   ws.send(JSON.stringify(res));
 });

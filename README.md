@@ -29,6 +29,10 @@ Implemented now:
 - SQLite-backed job queue with retry + high-risk approval flow
 - Local Adobe bridge over WebSocket (`/ws/local`) with worker registration and remote execute
 - Worker management + command endpoint (`GET /workers`, `POST /worker/execute?...`)
+- Operation schema validation with required payload fields
+- Risk classification per Adobe operation (low/medium/high)
+- High-risk approval flow (`GET /worker/approvals`, `POST /worker/approve?approvalId=...`)
+- Worker-side connector handlers wired by app/operation
 - CLI (`status`, `doctor`, `config`, `api templates`, `api add/test/remove/list/show`)
 - Tool registry with progressive detail levels
 - Action executor (sandboxed runtime stub)

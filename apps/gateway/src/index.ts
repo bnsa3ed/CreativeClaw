@@ -1,10 +1,10 @@
-import { createServer } from 'node:http';
+import { createServer, IncomingMessage } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { mergeConfig } from '../../../packages/core/src/index.js';
 import { ToolRegistry } from '../../../packages/tool-registry/src/index.js';
 import { MemoryStore } from '../../../packages/memory/src/index.js';
-import { AdobeConnectorHub } from '../../../packages/connectors-adobe/src/index.js';
+import { AdobeConnectorHub, getOperationSchema, validateOperationPayload } from '../../../packages/connectors-adobe/src/index.js';
 import { BraveSearchClient } from '../../../packages/search/src/index.js';
 import { APIRegistry } from '../../../packages/api-registry/src/index.js';
 import { JobQueue } from '../../../packages/jobs/src/index.js';
@@ -23,6 +23,7 @@ const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
 const workers = new Map<string, { ws: WebSocket; capabilities: string[]; lastSeen: number }>();
 const pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void; timeout: NodeJS.Timeout }>();
+const pendingApprovals = new Map<string, WorkerExecute & { workerId: string; risk: 'low' | 'medium' | 'high' }>();
 
 async function sendTelegramMessage(text: string): Promise<void> {
   if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
@@ -32,6 +33,33 @@ async function sendTelegramMessage(text: string): Promise<void> {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text })
   });
+}
+
+function readBody(req: IncomingMessage): Promise<any> {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.on('data', (chunk: Buffer) => (body += chunk.toString('utf-8')));
+    req.on('end', () => {
+      try { resolve(body ? JSON.parse(body) : {}); } catch (e) { reject(e); }
+    });
+  });
+}
+
+async function dispatchToWorker(workerId: string, app: WorkerExecute['app'], operation: string, payload?: Record<string, unknown>) {
+  const worker = workers.get(workerId);
+  if (!worker) return { ok: false, error: 'worker_not_found' };
+
+  const requestId = randomUUID();
+  const message: WorkerExecute = { type: 'execute', requestId, app, operation, payload };
+
+  return await new Promise<unknown>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      pending.delete(requestId);
+      reject(new Error('worker_timeout'));
+    }, 7000);
+    pending.set(requestId, { resolve, reject, timeout });
+    worker.ws.send(JSON.stringify(message));
+  }).catch((e) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
 }
 
 tools.register({
@@ -66,25 +94,53 @@ const server = createServer(async (req, res) => {
     const workerId = url.searchParams.get('workerId') || '';
     const app = (url.searchParams.get('app') || 'premiere') as WorkerExecute['app'];
     const operation = url.searchParams.get('operation') || 'noop';
-    const worker = workers.get(workerId);
-    if (!worker) {
-      res.writeHead(404, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: 'worker_not_found' }));
+    const payload = await readBody(req).catch(() => ({}));
+
+    const schema = getOperationSchema(app, operation);
+    if (!schema) {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'unknown_operation' }));
       return;
     }
 
-    const requestId = randomUUID();
-    const message: WorkerExecute = { type: 'execute', requestId, app, operation };
+    const valid = validateOperationPayload(schema, payload);
+    if (!valid.ok) {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'invalid_payload', missing: valid.missing }));
+      return;
+    }
 
-    const result = await new Promise<unknown>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        pending.delete(requestId);
-        reject(new Error('worker_timeout'));
-      }, 5000);
-      pending.set(requestId, { resolve, reject, timeout });
-      worker.ws.send(JSON.stringify(message));
-    }).catch((e) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+    if (schema.risk === 'high') {
+      const approvalId = randomUUID();
+      pendingApprovals.set(approvalId, { type: 'execute', requestId: randomUUID(), app, operation, payload, workerId, risk: schema.risk });
+      await sendTelegramMessage(`Approval required: ${operation} (${app}) [id:${approvalId}]`);
+      res.writeHead(202, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, needsApproval: true, approvalId, risk: schema.risk }));
+      return;
+    }
 
+    const result = await dispatchToWorker(workerId, app, operation, payload);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(result));
+    return;
+  }
+
+  if (url.pathname === '/worker/approvals') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify([...pendingApprovals.entries()].map(([id, v]) => ({ approvalId: id, app: v.app, operation: v.operation, workerId: v.workerId, risk: v.risk }))));
+    return;
+  }
+
+  if (url.pathname === '/worker/approve' && req.method === 'POST') {
+    const approvalId = url.searchParams.get('approvalId') || '';
+    const reqObj = pendingApprovals.get(approvalId);
+    if (!reqObj) {
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'approval_not_found' }));
+      return;
+    }
+    pendingApprovals.delete(approvalId);
+    const result = await dispatchToWorker(reqObj.workerId, reqObj.app, reqObj.operation, reqObj.payload);
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify(result));
     return;
@@ -156,33 +212,39 @@ const server = createServer(async (req, res) => {
   }
 
   if (url.pathname === '/telegram/inbound' && req.method === 'POST') {
-    let body = '';
-    req.on('data', chunk => (body += chunk));
-    req.on('end', async () => {
-      try {
-        const update = JSON.parse(body || '{}');
-        const text = (update?.message?.text || '').trim();
+    try {
+      const update = await readBody(req);
+      const text = (update?.message?.text || '').trim();
 
-        if (text === '/start') {
-          await sendTelegramMessage('CreativeClaw is online ✅');
-        } else if (text === '/status') {
-          await sendTelegramMessage('Status: healthy, queue ready, connectors loaded.');
-        } else if (text.startsWith('/run-job')) {
-          const name = text.replace('/run-job', '').trim() || 'telegram_job';
-          const job = jobs.add(name, 'low');
-          await jobs.runNext(async () => {});
-          await sendTelegramMessage(`Job executed: ${job.name}`);
-        } else if (text) {
-          await sendTelegramMessage(`CreativeClaw received: ${text}`);
+      if (text === '/start') {
+        await sendTelegramMessage('CreativeClaw is online ✅');
+      } else if (text === '/status') {
+        await sendTelegramMessage('Status: healthy, queue ready, connectors loaded.');
+      } else if (text.startsWith('/run-job')) {
+        const name = text.replace('/run-job', '').trim() || 'telegram_job';
+        const job = jobs.add(name, 'low');
+        await jobs.runNext(async () => {});
+        await sendTelegramMessage(`Job executed: ${job.name}`);
+      } else if (text.startsWith('/approve ')) {
+        const id = text.replace('/approve', '').trim();
+        const reqObj = pendingApprovals.get(id);
+        if (reqObj) {
+          pendingApprovals.delete(id);
+          const result = await dispatchToWorker(reqObj.workerId, reqObj.app, reqObj.operation, reqObj.payload);
+          await sendTelegramMessage(`Approved and executed ${reqObj.operation}: ${JSON.stringify(result)}`);
+        } else {
+          await sendTelegramMessage(`Approval id not found: ${id}`);
         }
-
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ ok: true }));
-      } catch (err) {
-        res.writeHead(400, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+      } else if (text) {
+        await sendTelegramMessage(`CreativeClaw received: ${text}`);
       }
-    });
+
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    } catch (err) {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+    }
     return;
   }
 
