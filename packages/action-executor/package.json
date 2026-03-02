@@ -1,0 +1,10 @@
+{
+  "name": "@creativeclaw/action-executor",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test ../../tests/action-executor.test.js"
+  }
+}

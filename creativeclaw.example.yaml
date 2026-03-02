@@ -1,0 +1,19 @@
+gateway:
+  host: 127.0.0.1
+  port: 3789
+models:
+  primary: openai-codex/gpt-5.3-codex
+  fallback: anthropic/claude-sonnet-4.5
+security:
+  requireApprovalForHighRisk: true
+channels:
+  telegram:
+    enabled: true
+    botToken: "${TELEGRAM_BOT_TOKEN}"
+    allowFrom:
+      - "5238367056"
+integrations:
+  brave:
+    apiKey: "${BRAVE_SEARCH_API_KEY}"
+  elevenlabs:
+    apiKey: "${ELEVENLABS_API_KEY}"

@@ -1,0 +1,19 @@
+{
+  "name": "@creativeclaw/gateway",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "node --watch src/index.ts",
+    "start": "node dist/index.js",
+    "test": "node --test ../../tests/gateway.test.js"
+  },
+  "dependencies": {
+    "@creativeclaw/core": "0.1.0",
+    "@creativeclaw/tool-registry": "0.1.0",
+    "@creativeclaw/action-executor": "0.1.0",
+    "@creativeclaw/memory": "0.1.0",
+    "@creativeclaw/connectors-adobe": "0.1.0"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "@creativeclaw/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "creativeclaw": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test ../../tests/cli.test.js"
+  },
+  "dependencies": {
+    "@creativeclaw/core": "0.1.0"
+  }
+}
