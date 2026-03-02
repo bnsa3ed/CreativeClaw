@@ -87,6 +87,21 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if (url.pathname === '/metrics') {
+    const counters = events.counters();
+    const lines = [
+      '# HELP creativeclaw_events_total Total events by name',
+      '# TYPE creativeclaw_events_total counter',
+      ...Object.entries(counters).map(([name, value]) => `creativeclaw_events_total{name="${name}"} ${value}`),
+      `creativeclaw_workers_connected ${workers.size}`,
+      `creativeclaw_pending_approvals ${pendingApprovals.size}`,
+      `creativeclaw_pending_requests ${pending.size}`
+    ];
+    res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4' });
+    res.end(lines.join('\n'));
+    return;
+  }
+
   if (url.pathname === '/tools') {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify(tools.list()));

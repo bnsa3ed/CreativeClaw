@@ -36,6 +36,8 @@ Implemented now:
 - Weighted style-learning confidence engine (approval + recency aware)
 - Vector memory backend abstraction (in-memory backend included)
 - Observability event bus + `/events` endpoint
+- Prometheus-friendly `/metrics` endpoint
+- Dashboard skeleton app (`@creativeclaw/dashboard`)
 - CLI (`status`, `doctor`, `config`, `api templates`, `api add/test/remove/list/show`)
 - Tool registry with progressive detail levels
 - Action executor (sandboxed runtime stub)
@@ -97,6 +99,14 @@ npm run -w @creativeclaw/worker-local build
 node dist/apps/worker-local/src/index.js
 ```
 
+### Run dashboard (optional)
+
+```bash
+npm run -w @creativeclaw/dashboard build
+node dist/apps/dashboard/src/index.js
+# -> http://127.0.0.1:3790
+```
+
 ### Run CLI
 
 ```bash
@@ -153,15 +163,15 @@ node apps/cli/dist/index.js doctor
 
 ## Testing
 
-Current smoke checks:
+Current checks:
 
 ```bash
 npm run build
-node apps/cli/dist/index.js status
-curl http://127.0.0.1:3789/health
+./tests/smoke.sh
+node tests/phase3-checks.mjs
+node tests/integration-gateway-worker.mjs
 ```
 
-(Comprehensive integration tests will be added as connector APIs are wired.)
 
 ---
 
