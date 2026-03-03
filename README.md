@@ -160,6 +160,20 @@ node apps/cli/dist/index.js doctor
 - Load/failure tests
 - Security audit pass
 
+### Phase 5
+- Team collaboration foundation (RBAC)
+- Roles: `owner`, `editor`, `reviewer`, `viewer`
+- Team management endpoints (`GET/POST/DELETE /team/users`)
+- Role-gated approval workflow (reviewer/owner only)
+- Telegram `/approve` command honors RBAC
+
+### Phase 6 — Hardening
+- **Load tests** (`load-tests/`) — autocannon scripts for `/worker/execute`, `/worker/approve`, `/team/users`
+- **Structured error catalog** (`packages/errors/`) — typed error codes + factory functions
+- **Runbook** (`docs/runbook.md`) — per-error-code cause, resolution, and operational commands
+- **Security checklist** (`scripts/security-check.sh`) — scans secrets, env vars, debug endpoints, CVEs
+- **CI workflow** (`.github/workflows/ci.yml`) — build + test + security on every push/PR
+
 ---
 
 ## Testing

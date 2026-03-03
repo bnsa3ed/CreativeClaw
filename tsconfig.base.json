@@ -12,7 +12,8 @@
       "@creativeclaw/tool-registry": ["packages/tool-registry/src/index.ts"],
       "@creativeclaw/action-executor": ["packages/action-executor/src/index.ts"],
       "@creativeclaw/memory": ["packages/memory/src/index.ts"],
-      "@creativeclaw/connectors-adobe": ["packages/connectors-adobe/src/index.ts"]
+      "@creativeclaw/connectors-adobe": ["packages/connectors-adobe/src/index.ts"],
+      "@creativeclaw/errors": ["packages/errors/src/index.ts"]
     },
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
