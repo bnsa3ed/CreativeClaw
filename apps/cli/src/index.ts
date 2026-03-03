@@ -178,8 +178,11 @@ CreativeClaw CLI v0.9.0
 
 USAGE: creativeclaw <command> [options]
 
-SETUP
+SETUP & UPDATES
   setup                      Interactive first-time setup wizard ⭐
+  update                     Safely update to the latest version 🔄
+    --dry-run                  Preview what would change (no files modified)
+  version                    Show current version
 
 GATEWAY COMMANDS
   status                     Gateway health + uptime
@@ -680,6 +683,280 @@ if (cmd === 'api') {
   } else if (sub === 'remove' && args[2]) {
     api.removeConnection(args[2], master); console.log(`✓ Removed: ${args[2]}`);
   } else { die(`Unknown api subcommand: ${sub}`); }
+  process.exit(0);
+}
+
+// ─── VERSION ──────────────────────────────────────────────────────────────────
+
+if (cmd === 'version' || cmd === '--version' || cmd === '-v') {
+  const pkgPath = path.join(findProjectRoot(), 'package.json');
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+  console.log(`CreativeClaw v${pkg.version}`);
+  process.exit(0);
+}
+
+// ─── UPDATE ───────────────────────────────────────────────────────────────────
+
+if (cmd === 'update') {
+  const ROOT = findProjectRoot();
+  const envPath = path.join(ROOT, '.env');
+  const pkgPath = path.join(ROOT, 'package.json');
+  const exampleEnvPath = path.join(ROOT, '.env.example');
+  const isGitRepo = fs.existsSync(path.join(ROOT, '.git'));
+  const dryRun = hasFlag('dry-run');
+
+  // ── Current version ──────────────────────────────────────────────────────
+  const currentPkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+  const currentVersion = currentPkg.version;
+
+  console.log('\n  ╔══════════════════════════════════════════╗');
+  console.log('  ║   CreativeClaw Update  🔄                 ║');
+  console.log('  ╚══════════════════════════════════════════╝\n');
+  console.log(`  Current version:  v${currentVersion}`);
+  console.log(`  Project root:     ${ROOT}`);
+  console.log(`  Mode:             ${isGitRepo ? 'git' : 'archive download'}`);
+  if (dryRun) console.log('  ⚠️  DRY RUN — no changes will be made\n');
+
+  // ── What will be preserved ────────────────────────────────────────────────
+  console.log('\n  ── What stays safe ─────────────────────────\n');
+  console.log('  ✓ ~/.creativeclaw/          (all databases: jobs, auth, memory, team)');
+  console.log('  ✓ .env                      (tokens, API keys, your config)');
+  console.log('  ✓ dist/                     (rebuilt fresh after update)');
+  console.log('\n  ── What gets updated ───────────────────────\n');
+  console.log('  ↑ Source code (packages/, apps/, cep-extension/)');
+  console.log('  ↑ Dependencies (pnpm install)');
+  console.log('  ↑ Build output (pnpm build)\n');
+
+  if (!dryRun) {
+    const confirm = await promptYN('  Proceed with update?', true);
+    if (!confirm) { console.log('\n  Aborted.\n'); process.exit(0); }
+  }
+
+  // ── Step 1: Check if gateway is running ───────────────────────────────────
+  let gatewayWasRunning = false;
+  let gatewayPort = 3789;
+  try {
+    const health: any = await fetch(`http://127.0.0.1:${config.gateway.port}/health`).then(r => r.json());
+    if (health?.ok) {
+      gatewayWasRunning = true;
+      gatewayPort = config.gateway.port;
+      console.log(`\n  ℹ️  Gateway is running on port ${gatewayPort} — will restart after update.`);
+    }
+  } catch { /* not running */ }
+
+  // ── Step 2: Back up .env ──────────────────────────────────────────────────
+  const envBackupPath = `${envPath}.backup-${Date.now()}`;
+  const envExists = fs.existsSync(envPath);
+  const currentEnvVars = envExists ? readEnvFile(envPath) : {};
+
+  if (envExists && !dryRun) {
+    fs.copyFileSync(envPath, envBackupPath);
+    console.log(`\n  ✓ .env backed up → ${path.basename(envBackupPath)}`);
+  }
+
+  // ── Step 3: Pull latest code ──────────────────────────────────────────────
+  console.log('\n  ── Pulling latest code ─────────────────────\n');
+
+  if (dryRun) {
+    if (isGitRepo) {
+      try {
+        const log = execSync('git fetch origin main --dry-run 2>&1', { cwd: ROOT }).toString().trim();
+        console.log(`  git fetch: ${log || 'Already up to date'}`);
+        const commits = execSync('git log HEAD..origin/main --oneline 2>/dev/null || echo ""', { cwd: ROOT }).toString().trim();
+        if (commits) {
+          console.log('\n  Pending commits:');
+          commits.split('\n').forEach(l => console.log(`    ${l}`));
+        } else {
+          console.log('  Already up to date — no new commits.');
+        }
+      } catch (e: any) {
+        console.log(`  Could not check remote: ${e.message}`);
+      }
+    }
+    console.log('\n  DRY RUN complete — no files changed.\n');
+    process.exit(0);
+  }
+
+  if (isGitRepo) {
+    // Stash any local changes, pull, pop stash
+    console.log('  Running git pull...');
+    try {
+      // Stash .env so git doesn't complain if it's tracked
+      execSync('git stash -- .env 2>/dev/null || true', { cwd: ROOT, stdio: 'pipe' });
+      const pullOut = execSync('git pull origin main --ff-only 2>&1', { cwd: ROOT }).toString().trim();
+      console.log(`  ${pullOut.split('\n').slice(-2).join(' ')}`);
+      // Restore stash if any
+      execSync('git stash pop 2>/dev/null || true', { cwd: ROOT, stdio: 'pipe' });
+    } catch (e: any) {
+      console.log(`  ⚠️  git pull failed: ${e.message}`);
+      console.log('  Restoring .env from backup...');
+      if (fs.existsSync(envBackupPath)) fs.copyFileSync(envBackupPath, envPath);
+      process.exit(1);
+    }
+  } else {
+    // Non-git: download latest tarball from GitHub
+    console.log('  Downloading latest release from GitHub...');
+    const REPO = 'bnsa3ed/CreativeClaw';
+    try {
+      const releaseRes = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`);
+      const release: any = await releaseRes.json();
+      const tarUrl: string = release.tarball_url;
+      const newVersion: string = release.tag_name?.replace(/^v/, '') || 'unknown';
+      console.log(`  Latest release: v${newVersion}`);
+
+      if (newVersion === currentVersion) {
+        console.log('  ✓ Already on latest version.\n');
+        if (fs.existsSync(envBackupPath)) fs.unlinkSync(envBackupPath);
+        process.exit(0);
+      }
+
+      // Download to tmp
+      const tmpTar = `/tmp/creativeclaw-update-${Date.now()}.tar.gz`;
+      const tmpDir = `/tmp/creativeclaw-extract-${Date.now()}`;
+      execSync(`curl -sL "${tarUrl}" -o "${tmpTar}"`);
+      fs.mkdirSync(tmpDir, { recursive: true });
+      execSync(`tar -xzf "${tmpTar}" -C "${tmpDir}" --strip-components=1`);
+
+      // Copy source code dirs, skip user data
+      const SAFE_DIRS = ['apps', 'packages', 'cep-extension', 'scripts', 'types', 'docs', 'load-tests', 'systemd'];
+      const SAFE_FILES = ['package.json', 'pnpm-lock.yaml', 'tsconfig.base.json', '.env.example',
+                          'docker-compose.yml', 'Dockerfile', 'fly.toml', 'LICENSE', 'README.md'];
+
+      for (const dir of SAFE_DIRS) {
+        const src = path.join(tmpDir, dir);
+        const dst = path.join(ROOT, dir);
+        if (fs.existsSync(src)) {
+          execSync(`rm -rf "${dst}" && cp -r "${src}" "${dst}"`);
+          console.log(`  ↑ ${dir}/`);
+        }
+      }
+      for (const file of SAFE_FILES) {
+        const src = path.join(tmpDir, file);
+        const dst = path.join(ROOT, file);
+        if (fs.existsSync(src)) {
+          fs.copyFileSync(src, dst);
+          console.log(`  ↑ ${file}`);
+        }
+      }
+
+      // Cleanup
+      fs.rmSync(tmpTar, { force: true });
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch (e: any) {
+      console.log(`  ⚠️  Download failed: ${e.message}`);
+      if (fs.existsSync(envBackupPath)) fs.copyFileSync(envBackupPath, envPath);
+      process.exit(1);
+    }
+  }
+
+  // ── Step 4: Restore + merge .env ─────────────────────────────────────────
+  console.log('\n  ── Restoring your configuration ────────────\n');
+
+  // Read new .env.example to find any brand-new keys
+  const exampleVars = fs.existsSync(exampleEnvPath) ? readEnvFile(exampleEnvPath) : {};
+  const newKeys = Object.keys(exampleVars).filter(k => !(k in currentEnvVars));
+
+  // Write merged .env: original values first, then hint about new keys
+  if (envExists) {
+    const lines: string[] = [
+      '# CreativeClaw environment — updated by `creativeclaw update`',
+      `# Previous backup: ${path.basename(envBackupPath)}`,
+      '',
+    ];
+
+    // Preserve all existing vars
+    for (const [k, v] of Object.entries(currentEnvVars)) {
+      lines.push(`${k}=${v}`);
+    }
+
+    // Append new keys from example (commented out, so nothing breaks)
+    if (newKeys.length > 0) {
+      lines.push('');
+      lines.push('# ── New options in this version (uncomment to enable) ──');
+      for (const k of newKeys) {
+        lines.push(`# ${k}=${exampleVars[k] || ''}`);
+      }
+    }
+
+    fs.writeFileSync(envPath, lines.join('\n') + '\n', 'utf8');
+    console.log(`  ✓ .env restored (${Object.keys(currentEnvVars).length} keys preserved)`);
+
+    if (newKeys.length > 0) {
+      console.log(`  ℹ️  ${newKeys.length} new config option(s) added as comments:`);
+      newKeys.forEach(k => console.log(`     # ${k}`));
+    }
+  }
+
+  // ── Step 5: Install deps ──────────────────────────────────────────────────
+  console.log('\n  ── Installing dependencies ─────────────────\n');
+  try {
+    execSync('pnpm install --frozen-lockfile 2>&1 | tail -3', { cwd: ROOT, stdio: 'inherit' });
+    console.log('  ✓ Dependencies installed');
+  } catch {
+    execSync('pnpm install 2>&1 | tail -3', { cwd: ROOT, stdio: 'inherit' });
+    console.log('  ✓ Dependencies installed (lockfile updated)');
+  }
+
+  // ── Step 6: Build ─────────────────────────────────────────────────────────
+  console.log('\n  ── Building ────────────────────────────────\n');
+  try {
+    execSync('pnpm build 2>&1 | tail -5', { cwd: ROOT, stdio: 'inherit' });
+    console.log('  ✓ Build complete');
+  } catch (e: any) {
+    console.log(`  ✗ Build failed: ${e.message}`);
+    console.log('  Your .env and data are safe. Fix the build error and try again.');
+    process.exit(1);
+  }
+
+  // ── Step 7: Read new version ──────────────────────────────────────────────
+  const newPkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+  const newVersion = newPkg.version;
+
+  // ── Step 8: Restart gateway if it was running ─────────────────────────────
+  if (gatewayWasRunning) {
+    console.log('\n  ── Restarting gateway ──────────────────────\n');
+    const gatewayBin = path.join(ROOT, 'dist/apps/gateway/src/index.js');
+    const envVars = readEnvFile(envPath);
+
+    const child = spawn(process.execPath, [gatewayBin], {
+      detached: true,
+      stdio: 'ignore',
+      env: { ...process.env, ...envVars },
+    });
+    child.unref();
+
+    await new Promise(r => setTimeout(r, 2500));
+    try {
+      const health: any = await fetch(`http://127.0.0.1:${gatewayPort}/health`).then(r => r.json());
+      if (health?.ok) {
+        console.log(`  ✓ Gateway restarted on port ${gatewayPort}`);
+      } else {
+        console.log('  ⚠️  Gateway started but health check failed.');
+      }
+    } catch {
+      console.log('  ⚠️  Gateway did not respond — start it manually:');
+      console.log(`     node ${gatewayBin}`);
+    }
+  }
+
+  // ── Done ──────────────────────────────────────────────────────────────────
+  console.log('\n  ╔══════════════════════════════════════════╗');
+  if (newVersion !== currentVersion) {
+    console.log(`  ║   ✅  Updated: v${currentVersion} → v${newVersion}`.padEnd(44) + '║');
+  } else {
+    console.log('  ║   ✅  Already up to date                  ║');
+  }
+  console.log('  ╚══════════════════════════════════════════╝\n');
+
+  console.log('  Data preserved:');
+  console.log('    ✓ ~/.creativeclaw/  (all your databases — jobs, auth keys, memory, team)');
+  if (envExists) console.log(`    ✓ .env              (backup at ${path.basename(envBackupPath)})`);
+  console.log('');
+
+  if (newKeys.length > 0) {
+    console.log('  💡 New config options are available — check your .env for commented hints.\n');
+  }
+
   process.exit(0);
 }
 
