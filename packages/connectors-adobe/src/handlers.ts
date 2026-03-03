@@ -20,7 +20,8 @@ export interface ConnectorExecutionResult {
   executionMode: 'real' | 'mock';
 }
 
-const MOCK_MODE = process.env.CREATIVECLAW_ADOBE_MOCK === 'true';
+// Evaluated at call time (not module load) so loadEnv() has already run
+const isMockMode = () => process.env.CREATIVECLAW_ADOBE_MOCK === 'true';
 
 /** Simulate a successful operation (used in mock/test mode) */
 function mockResult(app: AdobeApp, operation: string, payload?: Record<string, unknown>): ConnectorExecutionResult {
@@ -64,7 +65,7 @@ export async function runConnectorOperation(
   }
 
   // Skip real execution in mock mode or if not on macOS
-  if (MOCK_MODE) {
+  if (isMockMode()) {
     return mockResult(app, operation, p);
   }
 
