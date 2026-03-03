@@ -1,10 +1,52 @@
 import { createServer, IncomingMessage, ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { loadEnv, mergeConfig } from '../../../packages/core/src/index.js';
 
 // Load .env before anything else reads process.env
 loadEnv();
+
+// ─── Version (read from package.json at startup) ──────────────────────────────
+const __dirname = dirname(fileURLToPath(import.meta.url));
+let GATEWAY_VERSION = '0.0.0';
+try {
+  const pkg = JSON.parse(readFileSync(join(__dirname, '../../../../package.json'), 'utf8'));
+  GATEWAY_VERSION = pkg.version || '0.0.0';
+} catch { /* fallback */ }
+
+// ─── CORS config ─────────────────────────────────────────────────────────────
+const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
+
+// ─── Worker dispatch timeout ──────────────────────────────────────────────────
+// Default 10 minutes — export/render ops can take a long time
+const WORKER_TIMEOUT_MS = parseInt(process.env.WORKER_TIMEOUT_MS || '600000');
+
+// ─── Adobe app allowlist ──────────────────────────────────────────────────────
+const ALLOWED_APPS = new Set(['premiere', 'aftereffects', 'photoshop', 'illustrator']);
+
+// ─── Webhook URL SSRF guard ───────────────────────────────────────────────────
+// Rejects private/internal URLs to prevent server-side request forgery.
+function isValidWebhookUrl(raw: string): boolean {
+  let u: URL;
+  try { u = new URL(raw); } catch { return false; }
+  // Only allow http/https
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+  // Block private IP ranges and localhost
+  const host = u.hostname.toLowerCase();
+  if (host === 'localhost') return false;
+  if (/^127\./.test(host)) return false;
+  if (/^0\./.test(host)) return false;
+  if (/^10\./.test(host)) return false;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return false;
+  if (/^192\.168\./.test(host)) return false;
+  if (/^169\.254\./.test(host)) return false;   // AWS metadata
+  if (host === '::1' || host === '[::1]') return false;
+  if (host.endsWith('.local') || host.endsWith('.internal')) return false;
+  return true;
+}
 import { ToolRegistry } from '../../../packages/tool-registry/src/index.js';
 import { MemoryStore } from '../../../packages/memory/src/index.js';
 import { AdobeConnectorHub, getOperationSchema, validateOperationPayload } from '../../../packages/connectors-adobe/src/index.js';
@@ -249,7 +291,12 @@ function readRawBody(req: IncomingMessage): Promise<string> {
 }
 
 function json(res: ServerResponse, status: number, data: unknown) {
-  res.writeHead(status, { 'content-type': 'application/json' });
+  res.writeHead(status, {
+    'content-type': 'application/json',
+    'access-control-allow-origin': CORS_ORIGIN,
+    'access-control-allow-methods': 'GET, POST, PATCH, DELETE, OPTIONS',
+    'access-control-allow-headers': 'content-type, authorization, x-api-key, x-project-id',
+  });
   res.end(JSON.stringify(data));
 }
 
@@ -280,7 +327,7 @@ async function dispatchToWorker(
   const start = Date.now();
 
   const result: any = await new Promise<any>((resolve, reject) => {
-    const timeout = setTimeout(() => { pending.delete(requestId); reject(new Error('worker_timeout')); }, 7000);
+    const timeout = setTimeout(() => { pending.delete(requestId); reject(new Error('worker_timeout')); }, WORKER_TIMEOUT_MS);
     pending.set(requestId, { resolve, reject, timeout });
     worker.ws.send(JSON.stringify(message));
   }).catch((e) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
@@ -326,6 +373,18 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
   const projectId = (req.headers['x-project-id'] as string) || 'default';
 
+  // ── CORS preflight ────────────────────────────────────────────────────────
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, {
+      'access-control-allow-origin': CORS_ORIGIN,
+      'access-control-allow-methods': 'GET, POST, PATCH, DELETE, OPTIONS',
+      'access-control-allow-headers': 'content-type, authorization, x-api-key, x-project-id',
+      'access-control-max-age': '86400',
+    });
+    res.end();
+    return;
+  }
+
   // ── Rate limiter ──────────────────────────────────────────────────────────
   const clientIp = (req.headers['x-forwarded-for'] as string || req.socket.remoteAddress || 'unknown').split(',')[0].trim();
   if (isRateLimited(clientIp)) {
@@ -347,7 +406,7 @@ const server = createServer(async (req, res) => {
 
   if (url.pathname === '/health') {
     events.emit('health_check');
-    json(res, 200, { ok: true, app: 'creativeclaw-gateway', version: '0.8.0', uptime: Math.floor(process.uptime()), workers: workers.size, pendingApprovals: pendingApprovals.size });
+    json(res, 200, { ok: true, app: 'creativeclaw-gateway', version: GATEWAY_VERSION, uptime: Math.floor(process.uptime()), workers: workers.size, pendingApprovals: pendingApprovals.size });
     return;
   }
 
@@ -410,8 +469,10 @@ const server = createServer(async (req, res) => {
 
   if (url.pathname === '/ai/run' && req.method === 'POST') {
     const body = await readBody(req);
-    const { text, workerId, webhookUrl } = body;
+    const { text, workerId } = body;
+    const webhookUrl = body.webhookUrl && isValidWebhookUrl(body.webhookUrl) ? body.webhookUrl : undefined;
     if (!text) { json(res, 400, { error: 'text required' }); return; }
+    if (body.webhookUrl && !webhookUrl) { json(res, 400, { error: 'invalid_webhook_url', hint: 'Must be a public https:// URL' }); return; }
 
     const result = await nlp.parse(text, { projectId });
     if (!result.ok || !result.parsed) {
@@ -460,11 +521,19 @@ const server = createServer(async (req, res) => {
     if (!body.label || !body.kind || !body.schedule || !body.app || !body.operation) {
       json(res, 400, { error: 'label, kind, schedule, app, operation required' }); return;
     }
+    if (!ALLOWED_APPS.has(body.app)) {
+      json(res, 400, { error: 'invalid_app', allowed: [...ALLOWED_APPS] }); return;
+    }
+    if (body.webhookUrl && !isValidWebhookUrl(body.webhookUrl)) {
+      json(res, 400, { error: 'invalid_webhook_url', hint: 'Must be a public https:// URL' }); return;
+    }
     const job = scheduler.add({
       label: body.label, kind: body.kind, schedule: body.schedule,
       app: body.app, operation: body.operation,
       payload: typeof body.payload === 'string' ? body.payload : JSON.stringify(body.payload || {}),
-      workerId: body.workerId, webhookUrl: body.webhookUrl, enabled: body.enabled !== false,
+      workerId: body.workerId,
+      webhookUrl: body.webhookUrl && isValidWebhookUrl(body.webhookUrl) ? body.webhookUrl : undefined,
+      enabled: body.enabled !== false,
     });
     json(res, 201, job);
     return;
@@ -519,10 +588,13 @@ const server = createServer(async (req, res) => {
     const workerId = url.searchParams.get('workerId') || '';
     const app = url.searchParams.get('app') as WorkerExecute['app'];
     const operation = url.searchParams.get('operation') || '';
-    const webhookUrl = url.searchParams.get('webhookUrl') || undefined;
+    const rawWebhook = url.searchParams.get('webhookUrl') || undefined;
+    const webhookUrl = rawWebhook && isValidWebhookUrl(rawWebhook) ? rawWebhook : undefined;
     const body = await readBody(req);
 
     if (!workerId || !app || !operation) { json(res, 400, { ok: false, error: 'workerId, app, operation required' }); return; }
+    if (!ALLOWED_APPS.has(app)) { json(res, 400, { ok: false, error: 'invalid_app', allowed: [...ALLOWED_APPS] }); return; }
+    if (rawWebhook && !webhookUrl) { json(res, 400, { ok: false, error: 'invalid_webhook_url', hint: 'Must be a public https:// URL' }); return; }
 
     const schema = getOperationSchema(app, operation);
     if (!schema) { json(res, 400, { ok: false, error: 'unknown_operation', app, operation }); return; }
@@ -700,13 +772,26 @@ function shutdown(signal: string) {
 }
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGINT',  () => shutdown('SIGINT'));
+
+// ─── Unhandled error safety nets ──────────────────────────────────────────────
+// Prevent silent crashes from async errors in handlers or third-party code.
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[CreativeClaw] Unhandled promise rejection:', reason);
+  // Log but don't exit — keep the gateway running
+});
+process.on('uncaughtException', (err) => {
+  console.error('[CreativeClaw] Uncaught exception:', err);
+  // Fatal — attempt graceful shutdown
+  shutdown('uncaughtException');
+});
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 
 server.listen(config.gateway.port, config.gateway.host, () => {
-  console.log(`[CreativeClaw] Gateway v0.8.0 at http://${config.gateway.host}:${config.gateway.port}`);
+  console.log(`[CreativeClaw] Gateway v${GATEWAY_VERSION} at http://${config.gateway.host}:${config.gateway.port}`);
   console.log(`[CreativeClaw] NLP: ${nlp.enabled ? 'Claude (Anthropic)' : 'rule-based fallback'}`);
   console.log(`[CreativeClaw] Telegram: ${bot ? (WEBHOOK_PUBLIC_URL ? 'webhook' : 'polling') : 'disabled'}`);
   console.log(`[CreativeClaw] Mock mode: ${process.env.CREATIVECLAW_ADOBE_MOCK ?? 'false'}`);
+  console.log(`[CreativeClaw] Worker timeout: ${WORKER_TIMEOUT_MS / 1000}s`);
 });

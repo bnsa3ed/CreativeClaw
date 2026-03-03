@@ -155,8 +155,17 @@ function shutdown(signal: string) {
 }
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('SIGHUP', () => shutdown('SIGHUP'));
+process.on('SIGINT',  () => shutdown('SIGINT'));
+process.on('SIGHUP',  () => shutdown('SIGHUP'));
+
+// Keep worker alive on async errors — log and continue
+process.on('unhandledRejection', (reason) => {
+  console.error('[CreativeClaw Worker] Unhandled rejection:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[CreativeClaw Worker] Uncaught exception:', err);
+  // Don't crash — reconnect loop will handle re-establishing connection
+});
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 

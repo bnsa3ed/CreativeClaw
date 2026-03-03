@@ -10,7 +10,7 @@
  */
 
 import { DatabaseSync } from 'node:sqlite';
-import { createHmac, randomBytes } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { join } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -117,7 +117,20 @@ export class AuthManager {
     else if (keyHeader) candidate = keyHeader.trim();
 
     if (!candidate) return 'missing_api_key';
-    if (masterKey && candidate === masterKey) return null;
+
+    // Constant-time comparison to prevent timing attacks on the master key
+    if (masterKey) {
+      try {
+        const a = Buffer.from(candidate.padEnd(masterKey.length));
+        const b = Buffer.from(masterKey.padEnd(candidate.length));
+        const same = a.length === b.length && timingSafeEqual(
+          Buffer.from(candidate),
+          Buffer.from(masterKey),
+        );
+        if (same) return null;
+      } catch { /* length mismatch handled above */ }
+    }
+
     if (this.verify(candidate)) return null;
     return 'invalid_api_key';
   }
