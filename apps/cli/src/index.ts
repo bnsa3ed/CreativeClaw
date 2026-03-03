@@ -11,6 +11,7 @@ import readline from 'node:readline';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { execSync, spawn } from 'node:child_process';
 
 // Load .env before anything reads process.env
@@ -126,21 +127,28 @@ async function promptYN(question: string, defaultYes = true): Promise<boolean> {
 // ─── .env helpers ─────────────────────────────────────────────────────────────
 
 function findProjectRoot(): string {
-  // Walk up from cwd until we find package.json with name "creativeclaw"
-  let dir = process.cwd();
-  for (let i = 0; i < 6; i++) {
-    const pkgPath = path.join(dir, 'package.json');
-    if (fs.existsSync(pkgPath)) {
-      try {
-        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-        if (pkg.name === 'creativeclaw' || pkg.workspaces) return dir;
-      } catch {}
+  // Search from two starting points: cwd (for `cd repo && creativeclaw`)
+  // and the script's own compiled location (for `creativeclaw` run from anywhere).
+  const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+  const startDirs = [process.cwd(), scriptDir];
+
+  for (const start of startDirs) {
+    let dir = start;
+    for (let i = 0; i < 8; i++) {
+      const pkgPath = path.join(dir, 'package.json');
+      if (fs.existsSync(pkgPath)) {
+        try {
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+          if (pkg.name === 'creativeclaw') return dir;
+        } catch {}
+      }
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
     }
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
   }
-  return process.cwd();
+  // Final fallback: 4 levels up from compiled script (dist/apps/cli/src/ → root)
+  return path.resolve(scriptDir, '../../../..');
 }
 
 function readEnvFile(envPath: string): Record<string, string> {
