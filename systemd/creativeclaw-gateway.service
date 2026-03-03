@@ -1,0 +1,41 @@
+[Unit]
+Description=CreativeClaw Gateway — AI agent for Adobe creative workflows
+Documentation=https://github.com/bnsa3ed/CreativeClaw
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=creativeclaw
+Group=creativeclaw
+WorkingDirectory=/opt/creativeclaw
+ExecStart=/usr/bin/node /opt/creativeclaw/dist/apps/gateway/src/index.js
+ExecStop=/bin/kill -SIGTERM $MAINPID
+
+# Environment (override in /etc/creativeclaw/env)
+EnvironmentFile=-/etc/creativeclaw/env
+
+# Restart policy
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=creativeclaw-gateway
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=/var/lib/creativeclaw
+
+# Resource limits
+LimitNOFILE=65536
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

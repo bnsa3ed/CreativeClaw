@@ -1,0 +1,39 @@
+# CreativeClaw on Fly.io
+# Deploy: fly launch (first time) or fly deploy
+
+app = "creativeclaw-gateway"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  CREATIVECLAW_ADOBE_MOCK = "true"  # Adobe bridge not available in cloud; set false for local
+
+[http_service]
+  internal_port = 3789
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    timeout = "5s"
+    path = "/health"
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
+
+[mounts]
+  # Persist SQLite databases
+  source = "creativeclaw_data"
+  destination = "/home/claw/.creativeclaw"
+  initial_size = "1gb"
+  snapshot_retention = 5

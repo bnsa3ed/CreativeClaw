@@ -1,0 +1,67 @@
+version: '3.9'
+
+# CreativeClaw — Docker Compose (production-ish local stack)
+#
+# Usage:
+#   docker compose up -d
+#   docker compose logs -f gateway
+#   docker compose down
+
+services:
+  gateway:
+    build:
+      context: .
+      target: runtime
+    image: creativeclaw-gateway:latest
+    container_name: cc-gateway
+    restart: unless-stopped
+    ports:
+      - '3789:3789'
+    environment:
+      # Required
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      CREATIVECLAW_OWNER_ID: ${CREATIVECLAW_OWNER_ID}
+      # Optional
+      CREATIVECLAW_ADOBE_MOCK: ${CREATIVECLAW_ADOBE_MOCK:-true}
+      BRAVE_SEARCH_API_KEY: ${BRAVE_SEARCH_API_KEY:-}
+      NODE_ENV: production
+    volumes:
+      # Persist SQLite databases between restarts
+      - creativeclaw-data:/home/claw/.creativeclaw
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://localhost:3789/health']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - cc-net
+
+  dashboard:
+    build:
+      context: .
+      target: runtime
+    image: creativeclaw-gateway:latest
+    container_name: cc-dashboard
+    restart: unless-stopped
+    ports:
+      - '3790:3790'
+    environment:
+      CREATIVECLAW_GATEWAY_BASE: http://gateway:3789
+      CREATIVECLAW_DASHBOARD_PORT: 3790
+      CREATIVECLAW_DASHBOARD_REFRESH: 5000
+    command: ['node', 'dist/apps/dashboard/src/index.js']
+    depends_on:
+      gateway:
+        condition: service_healthy
+    networks:
+      - cc-net
+
+volumes:
+  creativeclaw-data:
+    driver: local
+
+networks:
+  cc-net:
+    driver: bridge
