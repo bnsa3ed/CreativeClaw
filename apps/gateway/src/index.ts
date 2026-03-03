@@ -1,7 +1,10 @@
 import { createServer, IncomingMessage, ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
-import { mergeConfig } from '../../../packages/core/src/index.js';
+import { loadEnv, mergeConfig } from '../../../packages/core/src/index.js';
+
+// Load .env before anything else reads process.env
+loadEnv();
 import { ToolRegistry } from '../../../packages/tool-registry/src/index.js';
 import { MemoryStore } from '../../../packages/memory/src/index.js';
 import { AdobeConnectorHub, getOperationSchema, validateOperationPayload } from '../../../packages/connectors-adobe/src/index.js';
@@ -48,6 +51,27 @@ const TELEGRAM_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET || randomUUID().slic
 const workers = new Map<string, { ws: WebSocket; capabilities: string[]; lastSeen: number }>();
 const pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void; timeout: NodeJS.Timeout }>();
 const pendingApprovals = new Map<string, WorkerExecute & { workerId: string; risk: 'low' | 'medium' | 'high' }>();
+
+// ─── Rate limiter (sliding window, per IP key) ────────────────────────────────
+const RATE_LIMIT = parseInt(process.env.GATEWAY_RATE_LIMIT || '120');    // max requests
+const RATE_WINDOW = parseInt(process.env.GATEWAY_RATE_WINDOW || '60000'); // per ms window
+const rateBuckets = new Map<string, number[]>();
+function isRateLimited(ip: string): boolean {
+  const now = Date.now();
+  const hits = (rateBuckets.get(ip) || []).filter(t => now - t < RATE_WINDOW);
+  hits.push(now);
+  rateBuckets.set(ip, hits);
+  return hits.length > RATE_LIMIT;
+}
+// Purge stale buckets every 30 s
+setInterval(() => {
+  const cutoff = Date.now() - RATE_WINDOW;
+  for (const [ip, hits] of rateBuckets) {
+    const fresh = hits.filter(t => t > cutoff);
+    if (!fresh.length) rateBuckets.delete(ip);
+    else rateBuckets.set(ip, fresh);
+  }
+}, 30_000).unref();
 
 // ─── Telegram Bot ─────────────────────────────────────────────────────────────
 
@@ -284,6 +308,7 @@ async function dispatchToWorker(
 // Wire scheduler dispatch
 scheduler.setDispatch(async (app, operation, payload, workerId) => {
   const wid = workerId || getFirstWorker() || '';
+  events.emit('scheduler_dispatch', 'info', { app, operation, workerId: wid });
   return dispatchToWorker(wid as any, app as any, operation, payload);
 });
 scheduler.start();
@@ -301,9 +326,22 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
   const projectId = (req.headers['x-project-id'] as string) || 'default';
 
+  // ── Rate limiter ──────────────────────────────────────────────────────────
+  const clientIp = (req.headers['x-forwarded-for'] as string || req.socket.remoteAddress || 'unknown').split(',')[0].trim();
+  if (isRateLimited(clientIp)) {
+    events.emit('rate_limited');
+    res.setHeader('Retry-After', String(Math.ceil(RATE_WINDOW / 1000)));
+    json(res, 429, { error: 'ERR_RATE_LIMIT', message: `Rate limit exceeded: max ${RATE_LIMIT} requests per ${RATE_WINDOW / 1000}s` });
+    return;
+  }
+
   // ── Auth middleware ────────────────────────────────────────────────────────
   const authErr = auth.authenticate(req);
-  if (authErr) { json(res, 401, { error: authErr, hint: 'Pass Authorization: Bearer <key> or set CREATIVECLAW_API_KEY env var' }); return; }
+  if (authErr) {
+    events.emit('auth_failure', 'warn', { ip: clientIp, path: url.pathname });
+    json(res, 401, { error: authErr, hint: 'Pass Authorization: Bearer <key> or set CREATIVECLAW_API_KEY env var' });
+    return;
+  }
 
   // ── Core ──────────────────────────────────────────────────────────────────
 
@@ -321,9 +359,26 @@ const server = createServer(async (req, res) => {
       '# HELP creativeclaw_events_total Total events by name',
       '# TYPE creativeclaw_events_total counter',
       ...Object.entries(counters).map(([name, value]) => `creativeclaw_events_total{name="${name}"} ${value}`),
+      '',
+      '# HELP creativeclaw_workers_connected Currently connected Adobe workers',
+      '# TYPE creativeclaw_workers_connected gauge',
       `creativeclaw_workers_connected ${workers.size}`,
+      '',
+      '# HELP creativeclaw_pending_approvals Pending high-risk approvals',
+      '# TYPE creativeclaw_pending_approvals gauge',
       `creativeclaw_pending_approvals ${pendingApprovals.size}`,
+      '',
+      '# HELP creativeclaw_pending_requests In-flight worker requests',
+      '# TYPE creativeclaw_pending_requests gauge',
       `creativeclaw_pending_requests ${pending.size}`,
+      '',
+      '# HELP creativeclaw_rate_buckets_active Active rate limiter buckets (unique IPs)',
+      '# TYPE creativeclaw_rate_buckets_active gauge',
+      `creativeclaw_rate_buckets_active ${rateBuckets.size}`,
+      '',
+      '# HELP creativeclaw_scheduled_jobs Total scheduled jobs (enabled)',
+      '# TYPE creativeclaw_scheduled_jobs gauge',
+      `creativeclaw_scheduled_jobs ${scheduler.list().filter((j: any) => j.enabled).length}`,
     ];
     res.writeHead(200, { 'content-type': 'text/plain' });
     res.end(lines.join('\n') + '\n');

@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "bin": {
-    "creativeclaw": "dist/index.js"
+    "creativeclaw": "../../dist/apps/cli/src/index.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

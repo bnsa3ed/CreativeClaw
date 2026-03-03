@@ -1,7 +1,39 @@
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+/**
+ * Load .env file into process.env.
+ * Walks up from the current file location to find the project root .env.
+ * Only sets variables that are NOT already in the environment
+ * (real env vars always win over .env values).
+ * Safe to call multiple times — idempotent.
+ */
+export function loadEnv(): void {
+  const __dirname = dirname(fileURLToPath(import.meta.url));
+  let dir = __dirname;
+  for (let i = 0; i < 8; i++) {
+    const envPath = join(dir, '.env');
+    if (existsSync(envPath)) {
+      const lines = readFileSync(envPath, 'utf8').split('\n');
+      for (const raw of lines) {
+        const line = raw.trim();
+        if (!line || line.startsWith('#')) continue;
+        const eq = line.indexOf('=');
+        if (eq < 0) continue;
+        const key = line.slice(0, eq).trim();
+        const val = line.slice(eq + 1).trim().replace(/^["']|["']$/g, '');
+        if (key && !(key in process.env)) process.env[key] = val;
+      }
+      return;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+}
 
 export type DetailLevel = 'name_only' | 'name_description' | 'full_schema';
 

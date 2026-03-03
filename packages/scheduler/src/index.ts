@@ -88,7 +88,7 @@ export class Scheduler {
   readonly TICK_MS = 30_000; // check every 30 seconds
 
   constructor() {
-    const dir = join(homedir(), '.creativeclaw');
+    const dir = process.env.CREATIVECLAW_DATA_DIR || join(homedir(), '.creativeclaw');
     mkdirSync(dir, { recursive: true });
     this.db = new DatabaseSync(join(dir, 'scheduler.sqlite'));
     this.db.exec(`

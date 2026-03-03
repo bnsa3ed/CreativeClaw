@@ -53,6 +53,10 @@ jobs:
         run: pnpm build
 
       - name: Run tests
+        env:
+          CREATIVECLAW_ADOBE_MOCK: "true"
+          CREATIVECLAW_DATA_DIR: /tmp/creativeclaw-ci
+          NODE_ENV: test
         run: pnpm test
 
   security:

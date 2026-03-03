@@ -6,6 +6,6 @@
   "types": "../../dist/packages/auth/src/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node --test ../../tests/auth.test.js"
+    "test": "node --experimental-vm-modules --test ../../tests/auth.test.js"
   }
 }

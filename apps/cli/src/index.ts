@@ -5,12 +5,16 @@
  * approve requests, manage team, view assets, and configure schedules.
  */
 
-import { mergeConfig } from '../../../packages/core/src/index.js';
+import { loadEnv, mergeConfig } from '../../../packages/core/src/index.js';
 import { APIRegistry } from '../../../packages/api-registry/src/index.js';
 import readline from 'node:readline';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { execSync, spawn } from 'node:child_process';
+
+// Load .env before anything reads process.env
+loadEnv();
 
 const args = process.argv.slice(2);
 const cmd = args[0];
@@ -171,6 +175,37 @@ function mergeEnvFile(envPath: string, newVars: Record<string, string>) {
   writeEnvFile(envPath, { ...existing, ...newVars });
 }
 
+// ─── PID management ───────────────────────────────────────────────────────────
+
+const DATA_DIR = path.join(os.homedir(), '.creativeclaw');
+const WORKER_PID_FILE = path.join(DATA_DIR, 'worker.pid');
+const GATEWAY_PID_FILE = path.join(DATA_DIR, 'gateway.pid');
+
+function readPid(file: string): number | null {
+  try {
+    if (!fs.existsSync(file)) return null;
+    const n = parseInt(fs.readFileSync(file, 'utf8').trim());
+    return isNaN(n) ? null : n;
+  } catch { return null; }
+}
+
+function isPidAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+function killPid(pid: number, signal: NodeJS.Signals = 'SIGTERM'): boolean {
+  try { process.kill(pid, signal); return true; } catch { return false; }
+}
+
+function savePid(file: string, pid: number) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(file, String(pid), 'utf8');
+}
+
+function clearPid(file: string) {
+  try { if (fs.existsSync(file)) fs.unlinkSync(file); } catch {}
+}
+
 // ─── Help ─────────────────────────────────────────────────────────────────────
 
 const HELP = `
@@ -190,6 +225,13 @@ GATEWAY COMMANDS
   config                     Show resolved config
   workers                    List connected Adobe workers
   assets [--app <app>]       Browse open project assets
+
+WORKER COMMANDS
+  worker start               Start the local Adobe worker (background)
+  worker stop                Stop the running worker
+  worker restart             Restart the worker
+  worker status              Check if worker is running + gateway sees it
+  worker logs                Tail worker log (if log file exists)
 
 OPERATION COMMANDS
   execute <app> <operation>  Execute an Adobe operation
@@ -391,6 +433,7 @@ if (cmd === 'setup') {
         env: { ...process.env, ...readEnvFile(envPath) },
       });
       child.unref();
+      savePid(GATEWAY_PID_FILE, child.pid!);
 
       // Give it 2s to boot, then check health
       console.log('  Waiting for gateway to boot...');
@@ -419,6 +462,25 @@ if (cmd === 'setup') {
           } catch {
             console.log('  ⚠️  Could not auto-generate API key.');
             console.log('     Run: creativeclaw auth keys add --label default');
+          }
+
+          // ── Start Adobe worker ───────────────────────────────────────────────
+          const workerBin = path.join(ROOT, 'dist/apps/worker-local/src/index.js');
+          if (fs.existsSync(workerBin)) {
+            console.log('\n  ── Starting Adobe worker ────────────────────────\n');
+            fs.mkdirSync(DATA_DIR, { recursive: true });
+            const workerLog = path.join(DATA_DIR, 'worker.log');
+            const logFd = fs.openSync(workerLog, 'a');
+            const workerChild = spawn(process.execPath, [workerBin], {
+              detached: true,
+              stdio: ['ignore', logFd, logFd],
+              env: { ...process.env, ...readEnvFile(envPath) },
+            });
+            workerChild.unref();
+            savePid(WORKER_PID_FILE, workerChild.pid!);
+            await new Promise(r => setTimeout(r, 1200));
+            console.log(`  ✓ Adobe worker started (PID ${workerChild.pid})`);
+            console.log(`  Log: ${workerLog}`);
           }
         } else {
           console.log('  ⚠️  Gateway started but health check failed. Check logs.');
@@ -497,13 +559,89 @@ if (cmd === 'doctor') {
 // config
 if (cmd === 'config') { out(config); process.exit(0); }
 
-// workers
+// workers (gateway list)
 if (cmd === 'workers') {
   const workers = await gw('/workers');
   if (!workers?.length) { console.log('No workers connected.'); process.exit(0); }
   for (const w of workers) {
     console.log(`  ${w.workerId}  caps: ${w.capabilities?.join(', ')}  idle: ${w.idleSecs}s`);
   }
+  process.exit(0);
+}
+
+// worker (local process management)
+if (cmd === 'worker') {
+  const ROOT = findProjectRoot();
+  const workerBin = path.join(ROOT, 'dist/apps/worker-local/src/index.js');
+  const logFile = path.join(DATA_DIR, 'worker.log');
+
+  const startWorker = () => {
+    if (!fs.existsSync(workerBin)) die(`Worker not built. Run: pnpm build`);
+    const existing = readPid(WORKER_PID_FILE);
+    if (existing && isPidAlive(existing)) {
+      console.log(`  ℹ️  Worker already running (PID ${existing})`);
+      return existing;
+    }
+    const out = fs.openSync(logFile, 'a');
+    const child = spawn(process.execPath, [workerBin], {
+      detached: true,
+      stdio: ['ignore', out, out],
+      env: { ...process.env, ...readEnvFile(path.join(ROOT, '.env')) },
+    });
+    child.unref();
+    savePid(WORKER_PID_FILE, child.pid!);
+    return child.pid!;
+  };
+
+  if (!sub || sub === 'status') {
+    const pid = readPid(WORKER_PID_FILE);
+    const alive = pid ? isPidAlive(pid) : false;
+    console.log(`\n  Local worker process: ${alive ? `✅ Running (PID ${pid})` : '❌ Not running'}`);
+    if (logFile && fs.existsSync(logFile)) console.log(`  Log file: ${logFile}`);
+    try {
+      const list = await gw('/workers');
+      console.log(`  Gateway sees ${list?.length ?? 0} worker(s):`);
+      (list || []).forEach((w: any) => console.log(`    • ${w.workerId}`));
+    } catch { console.log('  Gateway unreachable — start it first'); }
+
+  } else if (sub === 'start') {
+    const pid = startWorker();
+    await new Promise(r => setTimeout(r, 1200));
+    console.log(`  ✓ Worker started (PID ${pid})`);
+    console.log(`  Log: ${logFile}`);
+
+  } else if (sub === 'stop') {
+    const pid = readPid(WORKER_PID_FILE);
+    if (!pid || !isPidAlive(pid)) { console.log('  Worker is not running.'); process.exit(0); }
+    killPid(pid, 'SIGTERM');
+    await new Promise(r => setTimeout(r, 800));
+    if (isPidAlive(pid)) { killPid(pid, 'SIGKILL'); }
+    clearPid(WORKER_PID_FILE);
+    console.log(`  ✓ Worker stopped (PID ${pid})`);
+
+  } else if (sub === 'restart') {
+    const pid = readPid(WORKER_PID_FILE);
+    if (pid && isPidAlive(pid)) {
+      console.log(`  Stopping worker (PID ${pid})...`);
+      killPid(pid, 'SIGTERM');
+      await new Promise(r => setTimeout(r, 1000));
+      if (isPidAlive(pid)) killPid(pid, 'SIGKILL');
+      clearPid(WORKER_PID_FILE);
+    }
+    await new Promise(r => setTimeout(r, 500));
+    const newPid = startWorker();
+    await new Promise(r => setTimeout(r, 1200));
+    console.log(`  ✓ Worker restarted (PID ${newPid})`);
+
+  } else if (sub === 'logs') {
+    if (!fs.existsSync(logFile)) { console.log('No log file yet. Start the worker first.'); process.exit(0); }
+    try {
+      execSync(`tail -50 "${logFile}"`, { stdio: 'inherit' });
+    } catch {
+      const content = fs.readFileSync(logFile, 'utf8').split('\n').slice(-50).join('\n');
+      console.log(content);
+    }
+  } else { die(`Unknown worker subcommand: ${sub}\nUsage: creativeclaw worker [start|stop|restart|status|logs]`); }
   process.exit(0);
 }
 
@@ -912,30 +1050,75 @@ if (cmd === 'update') {
   const newPkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
   const newVersion = newPkg.version;
 
-  // ── Step 8: Restart gateway if it was running ─────────────────────────────
+  // ── Step 8: Restart gateway + worker if they were running ────────────────
   if (gatewayWasRunning) {
     console.log('\n  ── Restarting gateway ──────────────────────\n');
+
+    // Kill old gateway cleanly — try /shutdown first, then by PID, then by port
+    try {
+      await fetch(`http://127.0.0.1:${gatewayPort}/shutdown`, { method: 'POST' }).catch(() => {});
+      await new Promise(r => setTimeout(r, 1500));
+    } catch {}
+    const gwPid = readPid(GATEWAY_PID_FILE);
+    if (gwPid && isPidAlive(gwPid)) {
+      killPid(gwPid, 'SIGTERM');
+      await new Promise(r => setTimeout(r, 1000));
+      if (isPidAlive(gwPid)) killPid(gwPid, 'SIGKILL');
+    }
+    // Fallback: kill whatever is holding the port (macOS/Linux)
+    try {
+      execSync(`lsof -ti:${gatewayPort} 2>/dev/null | xargs kill -9 2>/dev/null || true`, { stdio: 'pipe' });
+      await new Promise(r => setTimeout(r, 800));
+    } catch {}
+
+    // Kill old worker too
+    const wPid = readPid(WORKER_PID_FILE);
+    if (wPid && isPidAlive(wPid)) {
+      killPid(wPid, 'SIGTERM');
+      await new Promise(r => setTimeout(r, 500));
+      if (isPidAlive(wPid)) killPid(wPid, 'SIGKILL');
+      clearPid(WORKER_PID_FILE);
+    }
+
     const gatewayBin = path.join(ROOT, 'dist/apps/gateway/src/index.js');
     const envVars = readEnvFile(envPath);
 
-    const child = spawn(process.execPath, [gatewayBin], {
+    // Start new gateway
+    const gwChild = spawn(process.execPath, [gatewayBin], {
       detached: true,
       stdio: 'ignore',
       env: { ...process.env, ...envVars },
     });
-    child.unref();
+    gwChild.unref();
+    savePid(GATEWAY_PID_FILE, gwChild.pid!);
 
     await new Promise(r => setTimeout(r, 2500));
     try {
       const health: any = await fetch(`http://127.0.0.1:${gatewayPort}/health`).then(r => r.json());
       if (health?.ok) {
-        console.log(`  ✓ Gateway restarted on port ${gatewayPort}`);
+        console.log(`  ✓ Gateway restarted on port ${gatewayPort} (PID ${gwChild.pid})`);
       } else {
         console.log('  ⚠️  Gateway started but health check failed.');
       }
     } catch {
       console.log('  ⚠️  Gateway did not respond — start it manually:');
       console.log(`     node ${gatewayBin}`);
+    }
+
+    // Restart worker
+    const workerBin = path.join(ROOT, 'dist/apps/worker-local/src/index.js');
+    if (fs.existsSync(workerBin)) {
+      const workerLog = path.join(DATA_DIR, 'worker.log');
+      const logFd = fs.openSync(workerLog, 'a');
+      const wChild = spawn(process.execPath, [workerBin], {
+        detached: true,
+        stdio: ['ignore', logFd, logFd],
+        env: { ...process.env, ...envVars },
+      });
+      wChild.unref();
+      savePid(WORKER_PID_FILE, wChild.pid!);
+      await new Promise(r => setTimeout(r, 1000));
+      console.log(`  ✓ Adobe worker restarted (PID ${wChild.pid})`);
     }
   }
 

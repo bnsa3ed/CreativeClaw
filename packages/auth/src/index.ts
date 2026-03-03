@@ -40,7 +40,7 @@ export class AuthManager {
   private db: DatabaseSync;
 
   constructor() {
-    const dir = join(homedir(), '.creativeclaw');
+    const dir = process.env.CREATIVECLAW_DATA_DIR || join(homedir(), '.creativeclaw');
     mkdirSync(dir, { recursive: true });
     this.db = new DatabaseSync(join(dir, 'auth.sqlite'));
     this.db.exec(`
