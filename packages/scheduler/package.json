@@ -1,0 +1,11 @@
+{
+  "name": "@creativeclaw/scheduler",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "../../dist/packages/scheduler/src/index.js",
+  "types": "../../dist/packages/scheduler/src/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "echo 'no scheduler tests'"
+  }
+}

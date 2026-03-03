@@ -1,0 +1,14 @@
+{
+  "name": "@creativeclaw/ai",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "../../dist/packages/ai/src/index.js",
+  "types": "../../dist/packages/ai/src/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "echo 'no ai tests'"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.54.0"
+  }
+}

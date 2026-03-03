@@ -12,9 +12,12 @@ const REFRESH_MS = Number(process.env.CREATIVECLAW_DASHBOARD_REFRESH || 5000);
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+const API_KEY = process.env.CREATIVECLAW_API_KEY || '';
+const AUTH_HEADERS: Record<string, string> = API_KEY ? { authorization: `Bearer ${API_KEY}` } : {};
+
 async function fetchJson(path: string): Promise<any> {
   try {
-    const r = await fetch(`${GATEWAY}${path}`);
+    const r = await fetch(`${GATEWAY}${path}`, { headers: AUTH_HEADERS });
     return r.json();
   } catch {
     return null;
@@ -23,7 +26,7 @@ async function fetchJson(path: string): Promise<any> {
 
 async function fetchText(path: string): Promise<string> {
   try {
-    const r = await fetch(`${GATEWAY}${path}`);
+    const r = await fetch(`${GATEWAY}${path}`, { headers: AUTH_HEADERS });
     return r.text();
   } catch {
     return '';
@@ -85,7 +88,7 @@ function html(data: Record<string, any>): string {
     health, workers, events, metricsText,
     jobHistory, opHistory, jobStats,
     teamUsers, approvals, memProfiles, memStats,
-    connectorHealth,
+    connectorHealth, scheduledJobs, authKeys, assets,
   } = data;
 
   const ok = !!health?.ok;
@@ -211,6 +214,8 @@ function html(data: Record<string, any>): string {
     <div class="stat"><div class="val">${memStats?.totalSignals ?? 0}</div><div class="lbl">Memory Signals</div></div>
     <div class="stat"><div class="val">${memStats?.projects ?? 0}</div><div class="lbl">Projects</div></div>
     <div class="stat"><div class="val">${opHistory?.total ?? 0}</div><div class="lbl">Operations Logged</div></div>
+    <div class="stat"><div class="val">${(scheduledJobs || []).filter((j: any) => j.enabled).length}</div><div class="lbl">Active Schedules</div></div>
+    <div class="stat"><div class="val">${(authKeys || []).length}</div><div class="lbl">API Keys</div></div>
   </div>
 
   <div class="cols">
@@ -278,6 +283,60 @@ function html(data: Record<string, any>): string {
 
   </div>
 
+  <!-- Scheduler + Auth + Assets row -->
+  <div class="cols">
+
+    <div class="card">
+      <h2><span class="dot" style="background:#f97316"></span>Scheduled Jobs</h2>
+      ${table(
+        ['Label', 'Kind', 'Schedule', 'App / Op', 'Runs', 'Next Run', 'Status'],
+        ((scheduledJobs || []) as any[]).map((j: any) => [
+          j.label,
+          j.kind,
+          `<code style="font-size:10px">${j.schedule}</code>`,
+          `${j.app}/${j.operation}`,
+          String(j.runCount ?? 0),
+          j.nextRunAt ? fmtTime(j.nextRunAt) : '—',
+          j.enabled ? statusBadge('healthy') : `<span style="color:#475569;font-size:11px">disabled</span>`,
+        ])
+      )}
+    </div>
+
+    <div class="card">
+      <h2><span class="dot" style="background:#ec4899"></span>API Keys</h2>
+      ${table(
+        ['Label', 'ID', 'Created', 'Last Used'],
+        ((authKeys || []) as any[]).map((k: any) => [
+          k.label,
+          `<code style="font-size:10px">${k.id}</code>`,
+          fmtTime(k.createdAt),
+          k.lastUsedAt ? fmtTime(k.lastUsedAt) : '<span style="color:#475569">never</span>',
+        ])
+      )}
+    </div>
+
+  </div>
+
+  <!-- Open Assets -->
+  <div class="card">
+    <h2><span class="dot" style="background:#14b8a6"></span>Open Adobe Assets</h2>
+    ${(() => {
+      const appResults: any[] = assets?.apps || [];
+      const active = appResults.filter((r: any) => r.items?.length > 0);
+      if (!active.length) return '<p class="empty">No open Adobe projects detected.</p>';
+      return active.map((r: any) =>
+        `<div style="margin-bottom:12px">
+          <div style="color:#94a3b8;font-size:12px;font-weight:600;margin-bottom:6px">${r.app} — ${r.projectName || 'untitled'} ${r.activeItem ? `<span style="color:#60a5fa">(active: ${r.activeItem})</span>` : ''}</div>
+          ${table(['Name', 'Type', 'Duration/Size'], r.items.slice(0, 10).map((item: any) => [
+            `<code style="font-size:11px">${item.name}</code>`,
+            item.type,
+            item.duration || (item.width ? `${item.width}×${item.height}` : '—'),
+          ]))}
+        </div>`
+      ).join('');
+    })()}
+  </div>
+
   <!-- Prometheus Metrics -->
   <div class="card">
     <h2><span class="dot" style="background:#6366f1"></span>Prometheus Metrics</h2>
@@ -297,7 +356,7 @@ const server = createServer(async (_req: IncomingMessage, res: ServerResponse) =
       health, workers, events, metricsText,
       jobHistory, opHistory, jobStats,
       teamUsers, approvals, memProfiles, memStats,
-      connectorHealth,
+      connectorHealth, scheduledJobs, authKeys, assets,
     ] = await Promise.all([
       fetchJson('/health'),
       fetchJson('/workers'),
@@ -311,6 +370,9 @@ const server = createServer(async (_req: IncomingMessage, res: ServerResponse) =
       fetchJson('/memory/profiles'),
       fetchJson('/memory/stats'),
       fetchJson('/connectors/health'),
+      fetchJson('/scheduler/jobs'),
+      fetchJson('/auth/keys'),
+      fetchJson('/assets'),
     ]);
 
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
@@ -318,7 +380,7 @@ const server = createServer(async (_req: IncomingMessage, res: ServerResponse) =
       health, workers, events, metricsText,
       jobHistory, opHistory, jobStats,
       teamUsers, approvals, memProfiles, memStats,
-      connectorHealth,
+      connectorHealth, scheduledJobs, authKeys, assets,
     }));
   } catch (e) {
     res.writeHead(500, { 'content-type': 'text/plain' });

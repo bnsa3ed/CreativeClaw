@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ExtensionManifest Version="7.0" ExtensionBundleId="com.creativeclaw.bridge"
+  ExtensionBundleVersion="1.0.0" ExtensionBundleName="CreativeClaw Bridge">
+
+  <ExtensionList>
+    <Extension Id="com.creativeclaw.bridge.panel" Version="1.0.0"/>
+  </ExtensionList>
+
+  <ExecutionEnvironment>
+    <HostList>
+      <Host Name="PHXS" Version="[22.0,99.9]"/>  <!-- Photoshop -->
+      <Host Name="PPRO" Version="[15.0,99.9]"/>  <!-- Premiere Pro -->
+      <Host Name="AEFT" Version="[22.0,99.9]"/>  <!-- After Effects -->
+      <Host Name="ILST" Version="[26.0,99.9]"/>  <!-- Illustrator -->
+    </HostList>
+    <LocaleList>
+      <Locale Code="All"/>
+    </LocaleList>
+    <RequiredRuntimeList>
+      <RequiredRuntime Name="CSXS" Version="7.0"/>
+    </RequiredRuntimeList>
+  </ExecutionEnvironment>
+
+  <DispatchInfoList>
+    <Extension Id="com.creativeclaw.bridge.panel">
+      <DispatchInfo>
+        <Resources>
+          <MainPath>./index.html</MainPath>
+          <CEFCommandLine>
+            <Parameter>--allow-file-access-from-files</Parameter>
+            <Parameter>--allow-running-insecure-content</Parameter>
+          </CEFCommandLine>
+        </Resources>
+        <Lifecycle>
+          <AutoVisible>true</AutoVisible>
+        </Lifecycle>
+        <UI>
+          <Type>Panel</Type>
+          <Menu>CreativeClaw Bridge</Menu>
+          <Geometry>
+            <PreferredSize><Height>180</Height><Width>320</Width></PreferredSize>
+            <MinSize><Height>120</Height><Width>200</Width></MinSize>
+          </Geometry>
+          <Icons>
+            <Icon Type="Normal">./icons/icon.png</Icon>
+          </Icons>
+        </UI>
+      </DispatchInfo>
+    </Extension>
+  </DispatchInfoList>
+
+</ExtensionManifest>

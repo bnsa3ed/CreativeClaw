@@ -1,0 +1,11 @@
+{
+  "name": "@creativeclaw/telegram",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "../../dist/packages/telegram/src/index.js",
+  "types": "../../dist/packages/telegram/src/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "echo 'no telegram tests'"
+  }
+}
